@@ -146,13 +146,25 @@ func (m pickerModel) subtreeComplete(n *treeNode) bool {
 	return true
 }
 
+// childrenComplete reports whether every child subtree is finished. Collapsing
+// hides the children, so this — not the node's own status — decides the default:
+// a working session whose subagents are all done still collapses.
+func (m pickerModel) childrenComplete(n *treeNode) bool {
+	for _, c := range n.children {
+		if !m.subtreeComplete(c) {
+			return false
+		}
+	}
+	return true
+}
+
 // effectiveExpanded honors an explicit user toggle, else defaults to collapsed
-// when the whole subtree is complete and expanded when something is still active.
+// when the children are all done and expanded when a child is still active.
 func (m pickerModel) effectiveExpanded(n *treeNode) bool {
 	if v, ok := m.userExpand[nodeKey(n)]; ok {
 		return v
 	}
-	return !m.subtreeComplete(n)
+	return !m.childrenComplete(n)
 }
 
 // visibleFlat is the list of rows to show: when filtering, every matching node
