@@ -41,9 +41,12 @@ var (
 	doneStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))             // green
 	helpStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")) // red
 
-	selectedRowStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
-	agentLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	agentLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 )
+
+// selSGR highlights the selected row as white-on-blue (like tmux's
+// window-status-current-style), readable regardless of the row's own colors.
+const selSGR = "\x1b[48;5;25m\x1b[38;5;231m"
 
 // runPicker paints the full tree instantly from cache (no claude query, no
 // subagent glob), then refreshes in the background.
@@ -285,7 +288,7 @@ func (m pickerModel) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "right", "l":
 		m.setExpand(vis, true)
 	case "left", "h":
-		m.setExpand(vis, false)
+		m.collapseLeft(vis)
 	case "enter":
 		return m.jump(vis)
 	}
@@ -338,6 +341,28 @@ func (m *pickerModel) setExpand(vis []*treeNode, v bool) {
 		n := vis[m.cursor]
 		if len(n.children) > 0 {
 			m.userExpand[nodeKey(n)] = v
+		}
+	}
+}
+
+// collapseLeft collapses an expanded parent in place; on a leaf or an already
+// collapsed node it jumps to the parent and collapses that (tree-nav style).
+func (m *pickerModel) collapseLeft(vis []*treeNode) {
+	if m.cursor >= len(vis) {
+		return
+	}
+	n := vis[m.cursor]
+	if len(n.children) > 0 && m.effectiveExpanded(n) {
+		m.userExpand[nodeKey(n)] = false
+		return
+	}
+	for i := m.cursor - 1; i >= 0; i-- {
+		if vis[i].depth < n.depth {
+			m.cursor = i
+			if len(vis[i].children) > 0 {
+				m.userExpand[nodeKey(vis[i])] = false
+			}
+			return
 		}
 	}
 }
@@ -523,15 +548,27 @@ func (m pickerModel) renderRow(n *treeNode, selected bool) string {
 		lw = 8
 	}
 	label := fit(n.label, lw)
-	if n.kind == kindAgent {
-		label = agentLabelStyle.Render(label)
-	}
-	status := st.Render(fit(statusTxt, statusW))
+	status := fit(statusTxt, statusW)
+	timeStr := uptime(n.startedAt)
 
-	line := sel + dimStyle.Render(prefix) + dimStyle.Render(caret) +
-		st.Render(dotCh) + " " + label + " " + status + " " + dimStyle.Render(uptime(n.startedAt))
+	// Selected: a full-width black-on-yellow bar with plain (uncolored) text.
 	if selected {
-		return selectedRowStyle.Render(line)
+		return m.highlightRow(sel + prefix + caret + dotCh + " " + label + " " + status + " " + timeStr)
 	}
-	return line
+
+	labelStyled := label
+	if n.kind == kindAgent {
+		labelStyled = agentLabelStyle.Render(label)
+	}
+	return sel + dimStyle.Render(prefix) + dimStyle.Render(caret) +
+		st.Render(dotCh) + " " + labelStyled + " " + st.Render(status) + " " + dimStyle.Render(timeStr)
+}
+
+// highlightRow renders a plain (uncolored) row as a full-width black-on-yellow
+// bar, padded to the window width — like tmux's choose-tree selection.
+func (m pickerModel) highlightRow(plain string) string {
+	if pad := m.width - lipgloss.Width(plain); pad > 0 {
+		plain += strings.Repeat(" ", pad)
+	}
+	return selSGR + plain + "\x1b[0m"
 }

@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -33,6 +33,9 @@ Icon
 
 # Go workspace file
 go.work.sum
+
+# Built binary in the repo root
+/cmanager
 
 # env file
 .env
