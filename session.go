@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os/exec"
-	"syscall"
 )
 
 // sessionInfo mirrors one entry of `claude agents --json --all`.
@@ -29,12 +28,4 @@ func pollSessions() ([]sessionInfo, error) {
 		return nil, err
 	}
 	return sessions, nil
-}
-
-// stopSession asks a session's claude process to exit (SIGTERM, so it shuts
-// down gracefully). For a cld-wrapped session the wrapper exits with its child.
-func stopSession(pid int) {
-	if pid > 0 {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-	}
 }

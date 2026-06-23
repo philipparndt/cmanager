@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"cmanager/internal/agentfs"
 )
 
 type nodeKind int
@@ -18,26 +16,25 @@ const (
 	kindAgent
 )
 
-// treeNode is one row in the tree: an interactive session or a (possibly
+// treeNode is one row in the picker: an interactive session or a (possibly
 // nested) subagent spawned by one.
 type treeNode struct {
 	kind      nodeKind
 	label     string
-	sessionID string // session id (sessions only)
+	sessionID string // owning session id (set on sessions and their agents)
 	agentID   string // agent id (agents only)
 	agentType string
 	cwd       string
 	status    string // sessions: "busy" | "idle"
+	task      string // sessions: latest user prompt (what it's working on)
 	startedAt int64  // epoch ms
 	lastMod   time.Time
-	logPath   string // transcript (session) or agent log (agent)
+	logPath   string // agent log (agents only), for the running heuristic
 	depth     int
 	prefix    string // tree connector prefix, set by flattenTree
 	children  []*treeNode
 
-	pid     int    // claude process id (sessions only), for stopping it
-	managed bool   // wrapped by a cld: live screen + prompt injection
-	cldID   string // agentfs id for screen/input, when managed
+	pid int // claude process id (sessions only), for pid→pane fallback
 }
 
 type agentMeta struct {
@@ -49,9 +46,11 @@ type agentMeta struct {
 // treated as still running (there is no explicit status on disk).
 const agentActiveWindow = 10 * time.Second
 
-// buildTree turns the flat session list into roots with their subagents nested
-// underneath. `managed` maps a claude pid to its cld wrapper, if any.
-func buildTree(sessions []sessionInfo, managed map[int]agentfs.Meta) []*treeNode {
+// buildTree turns the flat session list into roots. When includeAgents is true
+// it also discovers and nests each session's subagents (a filesystem glob); the
+// picker skips that for its instant first paint from cache and fills it in on
+// the background refresh.
+func buildTree(sessions []sessionInfo, includeAgents bool) []*treeNode {
 	roots := make([]*treeNode, 0, len(sessions))
 	for _, s := range sessions {
 		n := &treeNode{
@@ -61,26 +60,25 @@ func buildTree(sessions []sessionInfo, managed map[int]agentfs.Meta) []*treeNode
 			cwd:       s.Cwd,
 			status:    s.Status,
 			startedAt: s.StartedAt,
-			logPath:   transcriptPath(s.SessionID),
 			pid:       s.PID,
 		}
-		if m, ok := managed[s.PID]; ok {
-			n.managed = true
-			n.cldID = m.ID
+		if includeAgents {
+			n.task = latestPrompt(s.SessionID)
+			n.children = findSubagents(s.SessionID, 1)
+			stampSession(n.children, s.SessionID)
 		}
-		n.children = findSubagents(s.SessionID, 1)
 		roots = append(roots, n)
 	}
 	return roots
 }
 
-// managedByPID indexes live cld wrappers by the claude pid they manage.
-func managedByPID() map[int]agentfs.Meta {
-	out := map[int]agentfs.Meta{}
-	for _, m := range agentfs.List() {
-		out[m.ChildPID] = m
+// stampSession records the owning session id on every descendant agent so the
+// picker can jump to the session's pane from any row.
+func stampSession(nodes []*treeNode, sessionID string) {
+	for _, n := range nodes {
+		n.sessionID = sessionID
+		stampSession(n.children, sessionID)
 	}
-	return out
 }
 
 // findSubagents looks for agent logs under <project>/<parentID>/subagents and
@@ -137,39 +135,4 @@ func readAgentMeta(path string) agentMeta {
 
 func (n *treeNode) agentRunning() bool {
 	return !n.lastMod.IsZero() && time.Since(n.lastMod) < agentActiveWindow
-}
-
-// flattenTree returns nodes in pre-order, assigning each a display prefix
-// (tree connectors) and depth. The flat order matches the rendered order so a
-// single cursor index addresses both.
-func flattenTree(roots []*treeNode) []*treeNode {
-	var flat []*treeNode
-	var walk func(nodes []*treeNode, prefix string, depth int)
-	walk = func(nodes []*treeNode, prefix string, depth int) {
-		for i, n := range nodes {
-			last := i == len(nodes)-1
-			n.depth = depth
-			switch {
-			case depth == 0:
-				n.prefix = ""
-			case last:
-				n.prefix = prefix + "└─ "
-			default:
-				n.prefix = prefix + "├─ "
-			}
-			flat = append(flat, n)
-
-			childPrefix := prefix
-			if depth > 0 {
-				if last {
-					childPrefix = prefix + "   "
-				} else {
-					childPrefix = prefix + "│  "
-				}
-			}
-			walk(n.children, childPrefix, depth+1)
-		}
-	}
-	walk(roots, "", 0)
-	return flat
 }

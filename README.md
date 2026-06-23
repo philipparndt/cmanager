@@ -1,131 +1,127 @@
-# cmanager + cld
+# cmanager
 
-A terminal dashboard for every Claude Code instance on your machine — shown as a
-**tree** (sessions with their subagents nested underneath), with a live detail
-view and, for sessions you launch via `cld`, **real interaction**: watch the
-live screen in full color and drive the running session remotely — keystrokes,
-mode switches, and scrolling all forwarded.
+A tmux-native helper for working with many Claude Code sessions at once. It does
+two things and lets tmux do everything else:
 
-Two binaries:
+1. **Notifies you in tmux** when a Claude session in another pane needs your
+   input or finishes a turn.
+2. **A popup picker** listing every live Claude session with its status — pick
+   one and tmux jumps to that session's pane.
 
-| Binary     | Role                                                                 |
-|------------|----------------------------------------------------------------------|
-| `cmanager` | the dashboard TUI                                                    |
-| `cld`   | a drop-in wrapper for `claude` that mirrors its screen and accepts remote input |
+It is *not* a terminal multiplexer: there is no screen mirroring, no PTY
+wrapping, no pane resizing. tmux already does all of that. cmanager only adds the
+thing tmux can't know on its own — which panes are Claude sessions and what
+state they're in.
 
-## Overview (the tree)
+## How it works
 
-```
-~/dev/k3c                      ● working      12m
-├─ claude-code-guide: fleet…   ✓ done          2m
-└─ Explore: find auth paths    ● running       8s
-~/dev/vehub/vehub-test ⚡       ○ idle         34m      ← ⚡ = launched via cld
-~                              ● needs help: Approve edit to settings.json?
-```
+- **Session list + status** come from `claude agents --json --all` (busy / idle)
+  and the subagent logs under `~/.claude/projects/`.
+- **Pane mapping + notifications** come from a Claude Code hook. `cmanager hook`
+  runs on session events; it reads `$TMUX_PANE` from its environment to learn
+  which pane the session lives in, records it under
+  `~/.claude/cmanager/sessions/`, and drives tmux:
+  - **Notification** (needs permission / waiting on input) → marks the pane's
+    window (`@ai_status = needs`) and flashes a status-line message — unless that
+    pane is the one you're already looking at.
+  - **Stop** (turn finished) → clears the marker and flashes a "finished"
+    message. Intermediate stops (`stop_hook_active`) are ignored.
+  - **SessionStart / SessionEnd** → record / drop the pane mapping.
 
-- Sessions come from `claude agents --json`; subagents are discovered from
-  `~/.claude/projects/<slug>/<sessionId>/subagents/` and nested in the tree.
-- Status: 🔴 needs help · 🟡 working · ○ idle (sessions); ● running · ✓ done
-  (subagents, inferred from log mtime).
-- `⚡` marks a session wrapped by `cld` — those are interactive.
+Everything degrades gracefully outside tmux (the hook just no-ops the tmux
+calls).
 
-Keys: `↑/↓` move · `enter`/`→` open · `x` stop the selected session · `r`
-refresh · `g`/`G` top/bottom · `q` quit.
-
-## Detail view
-
-`enter` on a row opens it:
-
-- **Plain session / subagent** → a **live, read-only** transcript: messages,
-  tool calls, results, with markdown + syntax-highlighted code blocks and word
-  wrap. Auto-refreshes. `↑/↓` scroll, `esc`/`q` back.
-- **cld-managed session (⚡)** → the **live, fully interactive** screen of the
-  real Claude UI, **in color**. Every keystroke (and the scroll wheel) is
-  forwarded into the running session, so you can type prompts, cycle modes with
-  `shift+tab`, navigate menus, and answer permission prompts exactly as if you
-  were at its terminal. Press **`Esc` twice** to detach back to cmanager (a
-  single `Esc` passes through; `ctrl+c` is forwarded too, so you can interrupt
-  the session). While attached, the session is resized to fit the cmanager
-  pane, and reverts when you detach. To stop a session entirely, detach and
-  press **`x`** on its row in the overview.
-
-## How interaction works (cld)
-
-Run Claude through `cld` instead of `claude`:
+## Install
 
 ```sh
-cld                 # instead of: claude
-cld --model opus    # any claude args pass straight through
+make install          # builds and installs bin/cmanager to ~/.local/bin
+cmanager setup        # wires the hooks + tmux keybinding (shows a preview, asks first)
 ```
 
-You use Claude exactly as normal. Under the hood `cld`:
+`cmanager setup` edits `~/.claude/settings.json` and `~/.tmux.conf` for you — it
+backs each up first (`.bak-<timestamp>`), shows exactly what it will add, and
+only writes after you confirm. It uses this binary's absolute path, so the tmux
+popup works even though popups don't load your shell profile. It's idempotent —
+re-run it any time. Then reload tmux (`tmux source-file ~/.tmux.conf`) and
+restart your Claude sessions so the hooks attach.
 
-1. starts `claude` in a **PTY** and tees its output to your terminal,
-2. feeds that output through a **VT emulator** to reconstruct the fullscreen UI,
-   then re-emits it **with its colors and text attributes** into
-   `~/.claude/cmanager/agents/<id>/screen.txt`,
-3. records its identity (incl. the claude child PID) in `meta.json`, so
-   `cmanager` matches it to the right session row,
-4. reads an `input.fifo` and writes anything it receives into the PTY — that's
-   how `cmanager`'s forwarded keystrokes and scroll reach the live session,
-5. watches a `resize` file and sizes the PTY to whatever cmanager asks for while
-   it's focused (falling back to its own terminal otherwise).
+The manual steps below are equivalent, if you'd rather wire it yourself.
 
-## "Needs help" detection
+### 1. Wire the Claude Code hook
 
-The `claude agents --json` API only reports busy/idle, so cmanager also reads a
-`Notification` hook. The hook appends to `~/.claude/cmanager/needs-help.jsonl`
-when a session needs permission or input; cmanager flags that row red and clears
-it when the session goes busy again (you answered it).
-
-Install the hook once:
-
-```sh
-make install-hook
-```
-
-then add to `~/.claude/settings.json`:
+Add to `~/.claude/settings.json` (use the full path to `cmanager` if it isn't on
+the `PATH` Claude sees):
 
 ```json
-{ "hooks": { "Notification": [ { "hooks": [
-  { "type": "command", "command": "bash /Users/<you>/.claude/cmanager/cmanager-hook.sh" }
-] } ] } }
+{
+  "hooks": {
+    "Notification": [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "Stop":         [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "SessionEnd":   [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }]
+  }
+}
 ```
 
-## Build / install
+### 2. Add the tmux snippet
 
-```sh
-make build      # -> bin/cmanager, bin/cld
-make install    # -> ~/.local/bin (override with PREFIX=)
-make run        # run the dashboard
-make test       # smoke tests
+In `~/.tmux.conf`:
+
+```tmux
+# prefix + a → open the session picker in a popup.
+# Use an absolute path: tmux popups run via `sh -c` and do NOT source your
+# shell profile, so a bare `cmanager` won't be found if ~/.local/bin isn't on
+# the tmux server's PATH.
+bind a display-popup -E -w 80% -h 70% '$HOME/.local/bin/cmanager pick'
+
+# show ⚠ on windows whose Claude session needs input (set by `cmanager hook`)
+set -g window-status-format         '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,}'
+set -g window-status-current-format '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,}'
 ```
+
+Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
+`display-popup`.
+
+> If your shell profile prints anything unconditionally, gate it with
+> `[[ $- == *i* ]]` so it doesn't interfere with hook I/O.
+
+## Use
+
+- Run Claude normally inside tmux panes — no wrapper needed.
+- When a session in another pane needs you or finishes, you'll see it in the
+  status line (and the window gets a ⚠ until you answer).
+- Hit `prefix + a` to open the picker. Keys: `↑/↓` move · `enter` jump to the
+  pane · `space`/`←`/`→` collapse/expand a session's subagents · `/` filter ·
+  `r` refresh · `q`/`esc` dismiss.
+- Sessions show their subagents as a tree; a subtree whose work is **all done**
+  is collapsed by default, and one with active work stays expanded.
+- The panel under the list shows the selected session's directory and **what
+  it's currently working on** (its latest prompt).
+- It paints instantly from a cache and auto-refreshes (`⟳`) in the background
+  while open.
+
+## Commands
+
+| Command          | Role                                                      |
+|------------------|-----------------------------------------------------------|
+| `cmanager`       | open the picker (alias: `cmanager pick`)                  |
+| `cmanager hook`  | Claude Code hook target; reads the event JSON on stdin    |
 
 ## Layout
 
-| File                          | Purpose                                            |
-|-------------------------------|----------------------------------------------------|
-| `main.go`                     | dashboard TUI: tree, detail, key/scroll forwarding |
-| `keys.go`                     | encodes key & scroll events into terminal bytes    |
-| `tree.go`                     | sessions + subagent discovery + managed matching   |
-| `session.go`                  | `claude agents --json` polling                     |
-| `transcript.go`               | transcript rendering (markdown, code, wrap)        |
-| `needshelp.go`                | tails the Notification hook's records              |
-| `cmd/cld/main.go`             | the PTY wrapper                                    |
-| `cmd/cld/screen.go`           | renders the VT grid to colored ANSI                |
-| `internal/agentfs/agentfs.go` | on-disk protocol shared by both binaries           |
-| `hook/cmanager-hook.sh`       | the `Notification` hook                            |
+| File            | Purpose                                                       |
+|-----------------|---------------------------------------------------------------|
+| `main.go`       | subcommand dispatch + shared helpers                          |
+| `pick.go`       | the popup picker (bubbletea) + jump-to-pane                   |
+| `hook.go`       | `cmanager hook`: event → registry + tmux notifications        |
+| `tmux.go`       | tmux command helpers (notify, attention, jump, pid→pane)      |
+| `registry.go`   | per-session pane/needs records under `~/.claude/cmanager`     |
+| `session.go`    | `claude agents --json` polling                                |
+| `tree.go`       | sessions + subagent discovery, flattened for the picker       |
 
-## Caveats
+## Notes
 
-- While you're attached, the session is resized to the cmanager pane, so its
-  **own** terminal (where `cld` runs) will look missized until you detach.
-- Keystrokes are reconstructed from cmanager's events, so exotic combos
-  (some shift/alt sequences) may not map perfectly; the common navigation,
-  mode, and answer keys do.
-- Scroll forwarding emits SGR mouse reports, which only do something when the
-  session has mouse mode enabled.
-- You and `cmanager` share the same input stream into the session.
-- Plain (non-`cld`) sessions remain read-only — there is no input channel to
-  a `claude` you started directly.
+- A session started *before* the hook was installed has no recorded pane;
+  cmanager falls back to matching the claude pid to a pane via the process tree,
+  so jumping still works in most cases.
 - Each running session consumes your subscription quota independently.
