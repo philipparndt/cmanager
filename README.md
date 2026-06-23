@@ -6,7 +6,10 @@ two things and lets tmux do everything else:
 1. **Notifies you in tmux** when a Claude session in another pane needs your
    input or finishes a turn.
 2. **A popup picker** listing every live Claude session with its status — pick
-   one and tmux jumps to that session's pane.
+   one and it jumps to that session. Sessions are grouped by how they're reached:
+   **tmux** panes first, then a **ghostty** section (macOS surfaces, for sessions
+   run outside tmux), then a dimmed **can't jump** section for sessions reachable
+   by neither.
 
 It is *not* a terminal multiplexer: there is no screen mirroring, no PTY
 wrapping, no pane resizing. tmux already does all of that. cmanager only adds the
@@ -112,9 +115,10 @@ Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
 | File            | Purpose                                                       |
 |-----------------|---------------------------------------------------------------|
 | `main.go`       | subcommand dispatch + shared helpers                          |
-| `pick.go`       | the popup picker (bubbletea) + jump-to-pane                   |
+| `pick.go`       | the popup picker (bubbletea) + jump (tmux / Ghostty)          |
 | `hook.go`       | `cmanager hook`: event → registry + tmux notifications        |
 | `tmux.go`       | tmux command helpers (notify, attention, jump, pid→pane)      |
+| `ghostty.go`    | Ghostty AppleScript helpers (match a surface by cwd, focus it)|
 | `registry.go`   | per-session pane/needs records under `~/.claude/cmanager`     |
 | `session.go`    | `claude agents --json` polling                                |
 | `tree.go`       | sessions + subagent discovery, flattened for the picker       |
@@ -124,4 +128,10 @@ Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
 - A session started *before* the hook was installed has no recorded pane;
   cmanager falls back to matching the claude pid to a pane via the process tree,
   so jumping still works in most cases.
+- A session running directly in a **Ghostty** window (no tmux) is jumpable via
+  Ghostty's AppleScript dictionary (≥1.3.0): cmanager matches the surface whose
+  working directory equals the session's cwd — preferring the one whose title
+  carries Claude's `✳` mark — and `focus`es it. The first such jump may trigger a
+  one-time macOS "control Ghostty" automation prompt. Ghostty exposes no pid/tty,
+  so if two Claude sessions share a cwd the match can be ambiguous.
 - Each running session consumes your subscription quota independently.

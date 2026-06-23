@@ -54,15 +54,15 @@ func paneIsActive(pane string) bool {
 	return err == nil && out == "11"
 }
 
-// pidToPane finds the tmux pane whose shell is an ancestor of pid — a fallback
-// for sessions started before the hook recorded a pane. Returns "" if not found.
-func pidToPane(pid int) string {
-	if !inTmux() || pid <= 0 {
-		return ""
+// panePidMap maps each tmux pane's shell pid to its pane id. Outside tmux (or on
+// error) it returns nil, so lookups against it simply miss.
+func panePidMap() map[int]string {
+	if !inTmux() {
+		return nil
 	}
 	out, err := tmux("list-panes", "-a", "-F", "#{pane_pid} #{pane_id}")
 	if err != nil {
-		return ""
+		return nil
 	}
 	panePids := map[int]string{}
 	for _, line := range strings.Split(out, "\n") {
@@ -71,6 +71,21 @@ func pidToPane(pid int) string {
 		if _, e := fmt.Sscanf(line, "%d %s", &pp, &id); e == nil {
 			panePids[pp] = id
 		}
+	}
+	return panePids
+}
+
+// pidToPane finds the tmux pane whose shell is an ancestor of pid — a fallback
+// for sessions started before the hook recorded a pane. Returns "" if not found.
+func pidToPane(pid int) string {
+	return pidToPaneWith(pid, panePidMap())
+}
+
+// pidToPaneWith is pidToPane against an already-built pane map, so resolving many
+// sessions at once needs only one `tmux list-panes`.
+func pidToPaneWith(pid int, panePids map[int]string) string {
+	if pid <= 0 || len(panePids) == 0 {
+		return ""
 	}
 	for cur, i := pid, 0; cur > 1 && i < 20; i++ {
 		if id, ok := panePids[cur]; ok {
@@ -92,6 +107,23 @@ func ppid(pid int) int {
 	}
 	p, _ := strconv.Atoi(strings.TrimSpace(string(out)))
 	return p
+}
+
+// resolvePanes fills in each session root's tmux pane — the hook-recorded pane,
+// else the pid→pane ancestry fallback. A root left with pane "" isn't reachable
+// via tmux (started outside it), so the picker shows it separately as unjumpable.
+func resolvePanes(roots []*treeNode, recs map[string]sessionRec) {
+	pm := panePidMap()
+	for _, n := range roots {
+		if n.kind != kindSession {
+			continue
+		}
+		pane := recs[n.sessionID].Pane
+		if pane == "" {
+			pane = pidToPaneWith(n.pid, pm)
+		}
+		n.pane = pane
+	}
 }
 
 // jumpToPane navigates the attached client to pane: switch to its session, then

@@ -95,6 +95,8 @@ func refresh() tea.Msg {
 	})
 	reconcileStale(sessions)
 	roots := buildTree(sessions, true)
+	resolvePanes(roots, listSessionRecs())
+	resolveGhosttyTargets(roots)
 	saveTreeCache(roots)
 	return loadedMsg{roots: roots}
 }
@@ -215,7 +217,23 @@ func (m pickerModel) visibleFlat() []*treeNode {
 			}
 		}
 	}
-	walk(m.roots, "", 0)
+	// Sessions are ordered tmux → ghostty → unreachable, each shown under its own
+	// header in View. Root depth is 0 so reordering can't disturb tree prefixes.
+	walk(orderByGroup(m.roots), "", 0)
+	return out
+}
+
+// orderByGroup returns the session roots reordered into group order (tmux,
+// ghostty, unreachable), stable within each group.
+func orderByGroup(roots []*treeNode) []*treeNode {
+	buckets := make([][]*treeNode, groupUnreachable+1)
+	for _, n := range roots {
+		buckets[n.group()] = append(buckets[n.group()], n)
+	}
+	out := make([]*treeNode, 0, len(roots))
+	for _, b := range buckets {
+		out = append(out, b...)
+	}
 	return out
 }
 
@@ -379,37 +397,91 @@ func (m pickerModel) jump(vis []*treeNode) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	n := vis[m.cursor]
+
+	// Prefer tmux: switch straight to the pane.
 	pane := m.recs[n.sessionID].Pane
 	if pane == "" {
 		pane = pidToPane(m.sessionPID(n.sessionID))
 	}
-	logf("pick: jump session=%s pane=%q", n.sessionID, pane)
-	if pane == "" {
-		m.errMsg = "no tmux pane found for this session (was it started under the hook?)"
-		return m, nil
+	if pane != "" {
+		logf("pick: jump session=%s pane=%q", n.sessionID, pane)
+		if err := jumpToPane(pane); err != nil {
+			logf("pick: jump error: %v", err)
+			m.errMsg = "jump failed: " + err.Error()
+			return m, nil
+		}
+		return m, tea.Quit
 	}
-	if err := jumpToPane(pane); err != nil {
-		logf("pick: jump error: %v", err)
-		m.errMsg = "jump failed: " + err.Error()
-		return m, nil
+
+	// Otherwise, focus the matching Ghostty surface.
+	if gid := m.ghosttyTarget(n); gid != "" {
+		logf("pick: jump session=%s ghostty=%q", n.sessionID, gid)
+		if err := focusGhostty(gid); err != nil {
+			logf("pick: ghostty focus error: %v", err)
+			m.errMsg = "Ghostty focus failed: " + err.Error()
+			return m, nil
+		}
+		return m, tea.Quit
 	}
-	return m, tea.Quit
+
+	m.errMsg = "can't jump — this session isn't in tmux or a matched Ghostty surface"
+	return m, nil
+}
+
+// ghosttyTarget returns the Ghostty surface id for the session owning n: the id
+// resolved at refresh, or a fresh cwd lookup when that's empty (e.g. first paint).
+func (m pickerModel) ghosttyTarget(n *treeNode) string {
+	root := m.sessionNode(n.sessionID)
+	if root == nil {
+		return ""
+	}
+	if root.ghosttyID != "" {
+		return root.ghosttyID
+	}
+	return resolveGhostty(root.cwd, ghosttyTerminals())
+}
+
+// sessionNode finds the session root for a session id (any descendant agent row
+// resolves back to it).
+func (m pickerModel) sessionNode(sessionID string) *treeNode {
+	var find func(ns []*treeNode) *treeNode
+	find = func(ns []*treeNode) *treeNode {
+		for _, n := range ns {
+			if n.kind == kindSession && n.sessionID == sessionID {
+				return n
+			}
+			if r := find(n.children); r != nil {
+				return r
+			}
+		}
+		return nil
+	}
+	return find(m.roots)
 }
 
 func (m pickerModel) sessionPID(sessionID string) int {
-	var find func(ns []*treeNode) int
-	find = func(ns []*treeNode) int {
-		for _, n := range ns {
-			if n.kind == kindSession && n.sessionID == sessionID {
-				return n.pid
-			}
-			if p := find(n.children); p != 0 {
-				return p
-			}
-		}
-		return 0
+	if n := m.sessionNode(sessionID); n != nil {
+		return n.pid
 	}
-	return find(m.roots)
+	return 0
+}
+
+// sessionGroups maps every session id to its group, so each row (including a
+// subagent, via its owning session) knows which section header precedes it and
+// whether it renders dimmed.
+func (m pickerModel) sessionGroups() map[string]sessionGroup {
+	gm := map[string]sessionGroup{}
+	for _, n := range m.roots {
+		if n.kind == kindSession {
+			gm[n.sessionID] = n.group()
+		}
+	}
+	return gm
+}
+
+// groupHeader is the dim divider+label shown above a session group.
+func groupHeader(label string) string {
+	return "\n" + dimStyle.Render("  ─── "+label+" ───") + "\n\n"
 }
 
 func (m pickerModel) View() string {
@@ -441,8 +513,22 @@ func (m pickerModel) View() string {
 			b.WriteString(dimStyle.Render("No Claude sessions found.") + "\n")
 		}
 	}
+	groups := m.sessionGroups()
+	shown := map[sessionGroup]bool{}
 	for i, n := range vis {
-		b.WriteString(m.renderRow(n, i == m.cursor) + "\n")
+		g := groups[n.sessionID]
+		// Header before the ghostty / can't-jump sections (tmux is the unlabeled
+		// default). Suppressed while filtering, where rows show as a flat list.
+		if m.query == "" && !shown[g] {
+			switch g {
+			case groupGhostty:
+				b.WriteString(groupHeader("ghostty"))
+			case groupUnreachable:
+				b.WriteString(groupHeader("can't jump · not in tmux or Ghostty"))
+			}
+			shown[g] = true
+		}
+		b.WriteString(m.renderRow(n, i == m.cursor, g == groupUnreachable) + "\n")
 	}
 
 	if m.cursor < len(vis) {
@@ -496,7 +582,7 @@ func fit(s string, w int) string {
 	}
 }
 
-func (m pickerModel) renderRow(n *treeNode, selected bool) string {
+func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
 	sel := "  "
 	if selected {
 		sel = "▸ "
@@ -547,13 +633,26 @@ func (m pickerModel) renderRow(n *treeNode, selected bool) string {
 	if lw < 8 {
 		lw = 8
 	}
+	// Unjumpable rows carry a ⊘ marker at the right of the label column; reserve
+	// its width so the status/time columns stay aligned with the jumpable rows.
+	const markerW = 2
+	marker := ""
 	label := fit(n.label, lw)
+	if unjumpable {
+		marker = "⊘ "
+		label = fit(n.label, lw-markerW)
+	}
 	status := fit(statusTxt, statusW)
 	timeStr := uptime(n.startedAt)
 
 	// Selected: a full-width black-on-yellow bar with plain (uncolored) text.
 	if selected {
-		return m.highlightRow(sel + prefix + caret + dotCh + " " + label + " " + status + " " + timeStr)
+		return m.highlightRow(sel + prefix + caret + dotCh + " " + label + marker + " " + status + " " + timeStr)
+	}
+
+	// Unjumpable: dim the whole row, since Enter can't jump to it.
+	if unjumpable {
+		return sel + dimStyle.Render(prefix+caret+dotCh+" "+label+marker+" "+status+" "+timeStr)
 	}
 
 	labelStyled := label

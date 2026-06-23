@@ -34,7 +34,9 @@ type treeNode struct {
 	prefix    string // tree connector prefix, set by flattenTree
 	children  []*treeNode
 
-	pid int // claude process id (sessions only), for pid→pane fallback
+	pid       int    // claude process id (sessions only), for pid→pane fallback
+	pane      string // resolved tmux pane (sessions only); "" means not in tmux
+	ghosttyID string // resolved Ghostty surface id (sessions only), when not in tmux
 }
 
 type agentMeta struct {
@@ -131,6 +133,28 @@ func readAgentMeta(path string) agentMeta {
 		json.Unmarshal(b, &m)
 	}
 	return m
+}
+
+// sessionGroup buckets a session by how (and whether) the picker can jump to it.
+// The picker lists the groups in this order, each under its own header.
+type sessionGroup int
+
+const (
+	groupTmux        sessionGroup = iota // reachable via a tmux pane
+	groupGhostty                         // reachable via a matched Ghostty surface
+	groupUnreachable                     // neither — can't jump
+)
+
+// group classifies a session root. tmux wins over Ghostty when both resolve.
+func (n *treeNode) group() sessionGroup {
+	switch {
+	case n.pane != "":
+		return groupTmux
+	case n.ghosttyID != "":
+		return groupGhostty
+	default:
+		return groupUnreachable
+	}
 }
 
 func (n *treeNode) agentRunning() bool {
