@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -140,6 +141,55 @@ func ppid(pid int) int {
 	}
 	p, _ := strconv.Atoi(strings.TrimSpace(string(out)))
 	return p
+}
+
+// procInfo returns a process's parent pid and short command name in one ps call.
+// The name is basenamed (GUI apps report a full path) but kept whole otherwise,
+// so e.g. "Code Helper (Plugin)" survives intact.
+func procInfo(pid int) (parent int, name string) {
+	if pid <= 0 {
+		return 0, ""
+	}
+	out, err := exec.Command("ps", "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, ""
+	}
+	s := strings.TrimSpace(string(out))
+	i := strings.IndexByte(s, ' ')
+	if i < 0 {
+		p, _ := strconv.Atoi(s)
+		return p, ""
+	}
+	p, _ := strconv.Atoi(s[:i])
+	return p, filepath.Base(strings.TrimSpace(s[i+1:]))
+}
+
+// ownerProcess walks up from pid to the top-most ancestor under launchd — the
+// app hosting the session (a terminal like iTerm2/Ghostty/Code Helper, or the
+// process itself if detached). Used to label sessions we can't reach via tmux
+// or Ghostty. Returns "" if it can't be determined.
+func ownerProcess(pid int) string {
+	for cur, i := pid, 0; cur > 1 && i < 30; i++ {
+		parent, name := procInfo(cur)
+		if parent <= 1 {
+			return name
+		}
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	return ""
+}
+
+// resolveOwners fills in the hosting process for sessions reachable via neither
+// tmux nor Ghostty, so the picker can at least say where they're running.
+func resolveOwners(roots []*treeNode) {
+	for _, n := range roots {
+		if n.kind == kindSession && n.pane == "" && n.ghosttyID == "" {
+			n.owner = ownerProcess(n.pid)
+		}
+	}
 }
 
 // resolvePanes fills in each session root's tmux pane — the hook-recorded pane,
