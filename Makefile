@@ -1,7 +1,15 @@
 PREFIX  ?= $(HOME)/.local
 BINDIR  := $(PREFIX)/bin
 
-.PHONY: all build run tidy install clean fmt vet test
+.PHONY: help all build run tidy install clean fmt vet test
+
+.DEFAULT_GOAL := help
+
+## help: list the available targets (default)
+help:
+	@echo "Usage: make <target>"
+	@echo
+	@grep -E '^## [a-z]+:' $(MAKEFILE_LIST) | sed -e 's/## /  /' | sort
 
 all: build
 

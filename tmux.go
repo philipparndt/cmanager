@@ -100,6 +100,39 @@ func pidToPaneWith(pid int, panePids map[int]string) string {
 	return ""
 }
 
+// winInfo identifies the tmux window a pane lives in: key is a stable grouping
+// id (session_name:window_index), label is the header text shown to the user.
+type winInfo struct {
+	key   string
+	label string
+}
+
+// paneWindowMap maps each tmux pane id to its window. Outside tmux (or on error)
+// it returns nil, so lookups simply miss and sessions fall back to no window.
+func paneWindowMap() map[string]winInfo {
+	if !inTmux() {
+		return nil
+	}
+	out, err := tmux("list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}\t#{window_name}")
+	if err != nil {
+		return nil
+	}
+	m := map[string]winInfo{}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		key, name := parts[1], parts[2]
+		label := key
+		if name != "" {
+			label = key + " " + name
+		}
+		m[parts[0]] = winInfo{key: key, label: label}
+	}
+	return m
+}
+
 func ppid(pid int) int {
 	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
@@ -114,6 +147,7 @@ func ppid(pid int) int {
 // via tmux (started outside it), so the picker shows it separately as unjumpable.
 func resolvePanes(roots []*treeNode, recs map[string]sessionRec) {
 	pm := panePidMap()
+	wm := paneWindowMap()
 	for _, n := range roots {
 		if n.kind != kindSession {
 			continue
@@ -123,6 +157,10 @@ func resolvePanes(roots []*treeNode, recs map[string]sessionRec) {
 			pane = pidToPaneWith(n.pid, pm)
 		}
 		n.pane = pane
+		if wi, ok := wm[pane]; ok {
+			n.winKey = wi.key
+			n.winLabel = wi.label
+		}
 	}
 }
 

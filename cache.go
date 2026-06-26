@@ -26,6 +26,8 @@ type cachedNode struct {
 	Pid       int          `json:"pid,omitempty"` // session pid, for the pid→pane fallback
 	Cwd       string       `json:"cwd,omitempty"` // session cwd, for the Ghostty cwd match
 	Pane      string       `json:"pn,omitempty"`  // resolved tmux pane; "" = not in tmux
+	WinKey    string       `json:"wk,omitempty"`  // tmux window grouping key
+	WinLabel  string       `json:"wl,omitempty"`  // tmux window header label
 	Ghostty   string       `json:"gh,omitempty"`  // resolved Ghostty surface id, when not in tmux
 	Children  []cachedNode `json:"c,omitempty"`
 }
@@ -36,7 +38,7 @@ func toCached(n *treeNode) cachedNode {
 	cn := cachedNode{
 		Kind: n.kind, Label: n.label, SessionID: n.sessionID, AgentID: n.agentID,
 		Status: n.status, Task: n.task, StartedAt: n.startedAt, Running: n.agentRunning(),
-		Pid: n.pid, Cwd: n.cwd, Pane: n.pane, Ghostty: n.ghosttyID,
+		Pid: n.pid, Cwd: n.cwd, Pane: n.pane, WinKey: n.winKey, WinLabel: n.winLabel, Ghostty: n.ghosttyID,
 	}
 	for _, c := range n.children {
 		cn.Children = append(cn.Children, toCached(c))
@@ -48,7 +50,7 @@ func fromCached(cn cachedNode) *treeNode {
 	n := &treeNode{
 		kind: cn.Kind, label: cn.Label, sessionID: cn.SessionID, agentID: cn.AgentID,
 		status: cn.Status, task: cn.Task, startedAt: cn.StartedAt,
-		pid: cn.Pid, cwd: cn.Cwd, pane: cn.Pane, ghosttyID: cn.Ghostty,
+		pid: cn.Pid, cwd: cn.Cwd, pane: cn.Pane, winKey: cn.WinKey, winLabel: cn.WinLabel, ghosttyID: cn.Ghostty,
 	}
 	if cn.Running { // make agentRunning() report true again
 		n.lastMod = time.Now()

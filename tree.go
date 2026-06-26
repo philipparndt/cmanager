@@ -14,6 +14,7 @@ type nodeKind int
 const (
 	kindSession nodeKind = iota
 	kindAgent
+	kindWindow // synthetic parent grouping the sessions in one tmux window
 )
 
 // treeNode is one row in the picker: an interactive session or a (possibly
@@ -36,6 +37,8 @@ type treeNode struct {
 
 	pid       int    // claude process id (sessions only), for pid→pane fallback
 	pane      string // resolved tmux pane (sessions only); "" means not in tmux
+	winKey    string // tmux window grouping key (session_name:window_index), tmux sessions only
+	winLabel  string // tmux window header label, tmux sessions only
 	ghosttyID string // resolved Ghostty surface id (sessions only), when not in tmux
 }
 

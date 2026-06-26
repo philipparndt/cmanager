@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -25,6 +26,10 @@ const timeCol = 64
 // statusW is the fixed display width of the status column.
 const statusW = 14
 
+// rowIndent pads every tree row in from the left so the tree sits clear of the
+// terminal/popup border.
+const rowIndent = "  "
+
 type tickMsg struct{}
 
 func tick() tea.Cmd {
@@ -42,6 +47,7 @@ var (
 	helpStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")) // red
 
 	agentLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	winStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
 )
 
 // selSGR highlights the selected row as white-on-blue (like tmux's
@@ -121,16 +127,22 @@ func (m pickerModel) Init() tea.Cmd { return tea.Batch(refresh, tick()) }
 
 // nodeKey identifies a node for remembering its expand state across refreshes.
 func nodeKey(n *treeNode) string {
-	if n.kind == kindAgent {
+	switch n.kind {
+	case kindAgent:
 		return "a:" + n.agentID
+	case kindWindow:
+		return "w:" + n.winKey
 	}
 	return "s:" + n.sessionID
 }
 
 // nodeComplete reports whether a node itself is finished (not working/needing input).
 func (m pickerModel) nodeComplete(n *treeNode) bool {
-	if n.kind == kindAgent {
+	switch n.kind {
+	case kindAgent:
 		return !n.agentRunning()
+	case kindWindow:
+		return true // a container; childrenComplete drives whether it collapses
 	}
 	if n.status == "busy" || m.recs[n.sessionID].needsAttention() {
 		return false
@@ -217,22 +229,56 @@ func (m pickerModel) visibleFlat() []*treeNode {
 			}
 		}
 	}
-	// Sessions are ordered tmux → ghostty → unreachable, each shown under its own
-	// header in View. Root depth is 0 so reordering can't disturb tree prefixes.
-	walk(orderByGroup(m.roots), "", 0)
+	// tmux sessions nest under a collapsible node per window; ghostty and
+	// unreachable sessions follow flat under their own headers. Root depth is 0
+	// so the grouping can't disturb tree prefixes.
+	walk(m.displayRoots(), "", 0)
 	return out
 }
 
-// orderByGroup returns the session roots reordered into group order (tmux,
-// ghostty, unreachable), stable within each group.
-func orderByGroup(roots []*treeNode) []*treeNode {
-	buckets := make([][]*treeNode, groupUnreachable+1)
-	for _, n := range roots {
-		buckets[n.group()] = append(buckets[n.group()], n)
+// displayRoots returns the top-level rows: tmux sessions wrapped under a
+// collapsible node per window (like agents nest under a session), then the
+// ghostty and unreachable sessions flat.
+func (m pickerModel) displayRoots() []*treeNode {
+	var tmux, ghostty, unreach []*treeNode
+	for _, n := range m.roots {
+		switch n.group() {
+		case groupTmux:
+			tmux = append(tmux, n)
+		case groupGhostty:
+			ghostty = append(ghostty, n)
+		default:
+			unreach = append(unreach, n)
+		}
 	}
-	out := make([]*treeNode, 0, len(roots))
-	for _, b := range buckets {
-		out = append(out, b...)
+	out := windowNodes(tmux)
+	out = append(out, ghostty...)
+	out = append(out, unreach...)
+	return out
+}
+
+// windowNodes wraps tmux session roots in a synthetic parent per window,
+// preserving the order each window first appears in. The parent collapses like
+// any tree node, so an idle window folds away to a single line.
+func windowNodes(sessions []*treeNode) []*treeNode {
+	var order []string
+	byWin := map[string]*treeNode{}
+	for _, s := range sessions {
+		w := byWin[s.winKey]
+		if w == nil {
+			label := s.winLabel
+			if label == "" {
+				label = "tmux"
+			}
+			w = &treeNode{kind: kindWindow, label: label, winKey: s.winKey}
+			byWin[s.winKey] = w
+			order = append(order, s.winKey)
+		}
+		w.children = append(w.children, s)
+	}
+	out := make([]*treeNode, 0, len(order))
+	for _, k := range order {
+		out = append(out, byWin[k])
 	}
 	return out
 }
@@ -292,6 +338,12 @@ func (m pickerModel) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(vis)-1 {
 			m.cursor++
 		}
+	case "alt+up", "alt+k":
+		m.cursor = m.nextActive(vis, -1)
+		m.expandAt(vis, m.cursor)
+	case "alt+down", "alt+j":
+		m.cursor = m.nextActive(vis, +1)
+		m.expandAt(vis, m.cursor)
 	case "g", "home":
 		m.cursor = 0
 	case "G", "end":
@@ -385,6 +437,40 @@ func (m *pickerModel) collapseLeft(vis []*treeNode) {
 	}
 }
 
+// rowActive reports whether a row is non-idle: a working/waiting session, a
+// running agent, or a window with any active session under it.
+func (m pickerModel) rowActive(n *treeNode) bool {
+	if n.kind == kindWindow {
+		return !m.childrenComplete(n)
+	}
+	return !m.nodeComplete(n)
+}
+
+// nextActive returns the index of the next non-idle row from the cursor in
+// direction dir (+1 down / -1 up), wrapping around. Stays put if none qualify.
+func (m pickerModel) nextActive(vis []*treeNode, dir int) int {
+	n := len(vis)
+	if n == 0 {
+		return 0
+	}
+	for i := 1; i <= n; i++ {
+		j := ((m.cursor+dir*i)%n + n) % n
+		if m.rowActive(vis[j]) {
+			return j
+		}
+	}
+	return m.cursor
+}
+
+// expandAt expands the node at index i (when it has children), so option-nav
+// reveals what's inside the instance it lands on — e.g. a collapsed window's
+// active sessions or a session's running subagents.
+func (m *pickerModel) expandAt(vis []*treeNode, i int) {
+	if i >= 0 && i < len(vis) && len(vis[i].children) > 0 {
+		m.userExpand[nodeKey(vis[i])] = true
+	}
+}
+
 func (m *pickerModel) clampCursor() {
 	if n := len(m.visibleFlat()); m.cursor >= n {
 		m.cursor = max(0, n-1)
@@ -397,6 +483,15 @@ func (m pickerModel) jump(vis []*treeNode) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	n := vis[m.cursor]
+
+	// A window node has no session of its own — jump to its first session, which
+	// lands the client on that window.
+	if n.kind == kindWindow {
+		if len(n.children) == 0 {
+			return m, nil
+		}
+		n = n.children[0]
+	}
 
 	// Prefer tmux: switch straight to the pane.
 	pane := m.recs[n.sessionID].Pane
@@ -516,9 +611,13 @@ func (m pickerModel) View() string {
 	groups := m.sessionGroups()
 	shown := map[sessionGroup]bool{}
 	for i, n := range vis {
-		g := groups[n.sessionID]
-		// Header before the ghostty / can't-jump sections (tmux is the unlabeled
-		// default). Suppressed while filtering, where rows show as a flat list.
+		// tmux rows (window nodes and everything nested under them) carry no
+		// header — the window tree is the grouping. ghostty / can't-jump sessions
+		// still get a divider. Suppressed while filtering (rows are a flat list).
+		g := groupTmux
+		if n.kind != kindWindow {
+			g = groups[n.sessionID]
+		}
 		if m.query == "" && !shown[g] {
 			switch g {
 			case groupGhostty:
@@ -528,14 +627,14 @@ func (m pickerModel) View() string {
 			}
 			shown[g] = true
 		}
-		b.WriteString(m.renderRow(n, i == m.cursor, g == groupUnreachable) + "\n")
+		b.WriteString(rowIndent + m.renderRow(n, i == m.cursor, g == groupUnreachable) + "\n")
 	}
 
 	if m.cursor < len(vis) {
 		b.WriteString(m.detailPanel(vis[m.cursor]))
 	}
 
-	help := "↑/↓ move · enter jump · space expand · / filter · r refresh · q quit"
+	help := "↑/↓ move · ⌥↑/↓ next active · enter jump · space expand · / filter · r refresh · q quit"
 	if m.filtering {
 		help = "type to filter · ↑/↓ move · enter jump · esc clear"
 	}
@@ -548,6 +647,9 @@ func (m pickerModel) View() string {
 func (m pickerModel) detailPanel(n *treeNode) string {
 	w := max(20, m.width-2)
 	sep := dimStyle.Render(strings.Repeat("─", w)) + "\n"
+	if n.kind == kindWindow {
+		return sep + winStyle.Render(truncate(n.label, w-14)) + dimStyle.Render(fmt.Sprintf("  ·  tmux window · %d", len(n.children))) + "\n"
+	}
 	if n.kind == kindAgent {
 		state := doneStyle.Render("done")
 		if n.agentRunning() {
@@ -583,10 +685,6 @@ func fit(s string, w int) string {
 }
 
 func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
-	sel := "  "
-	if selected {
-		sel = "▸ "
-	}
 	filtering := m.query != ""
 
 	prefix := n.prefix
@@ -598,10 +696,14 @@ func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
 	caret := "  "
 	if !filtering && len(n.children) > 0 {
 		if m.effectiveExpanded(n) {
-			caret = "▾ "
+			caret = "▼ "
 		} else {
-			caret = "▸ "
+			caret = "▶ "
 		}
+	}
+
+	if n.kind == kindWindow {
+		return m.renderWindowRow(n, prefix, caret, selected)
 	}
 
 	// Status dot + text, with their color.
@@ -628,8 +730,8 @@ func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
 	}
 
 	// Label width shrinks with depth so the status/time columns stay aligned.
-	// layout: sel(2) prefix(pw) caret(2) dot(1) sp(1) label(lw) sp(1) status(sw) sp(1) time
-	lw := timeCol - 8 - prefixW - statusW
+	// layout: prefix(pw) caret(2) dot(1) sp(1) label(lw) sp(1) status(sw) sp(1) time
+	lw := timeCol - 6 - prefixW - statusW
 	if lw < 8 {
 		lw = 8
 	}
@@ -647,26 +749,57 @@ func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
 
 	// Selected: a full-width black-on-yellow bar with plain (uncolored) text.
 	if selected {
-		return m.highlightRow(sel + prefix + caret + dotCh + " " + label + marker + " " + status + " " + timeStr)
+		return m.highlightRow(prefix + caret + dotCh + " " + label + marker + " " + status + " " + timeStr)
 	}
 
 	// Unjumpable: dim the whole row, since Enter can't jump to it.
 	if unjumpable {
-		return sel + dimStyle.Render(prefix+caret+dotCh+" "+label+marker+" "+status+" "+timeStr)
+		return dimStyle.Render(prefix + caret + dotCh + " " + label + marker + " " + status + " " + timeStr)
 	}
 
 	labelStyled := label
 	if n.kind == kindAgent {
 		labelStyled = agentLabelStyle.Render(label)
 	}
-	return sel + dimStyle.Render(prefix) + dimStyle.Render(caret) +
+	return dimStyle.Render(prefix) + dimStyle.Render(caret) +
 		st.Render(dotCh) + " " + labelStyled + " " + st.Render(status) + " " + dimStyle.Render(timeStr)
+}
+
+// renderWindowRow draws a tmux-window grouping node: a dot reflecting the most
+// urgent session under it, the window label, and a session count. When
+// collapsed the dot is the only hint of what's happening inside.
+func (m pickerModel) renderWindowRow(n *treeNode, prefix, caret string, selected bool) string {
+	dotCh, st := m.windowDot(n)
+	count := fmt.Sprintf(" (%d)", len(n.children))
+	if selected {
+		return m.highlightRow(prefix + caret + dotCh + " " + n.label + count)
+	}
+	return dimStyle.Render(prefix) + dimStyle.Render(caret) +
+		st.Render(dotCh) + " " + winStyle.Render(n.label) + dimStyle.Render(count)
+}
+
+// windowDot aggregates the state of a window's sessions into one status dot:
+// red if any session is waiting on the user, amber if any is working, else idle.
+func (m pickerModel) windowDot(n *treeNode) (string, lipgloss.Style) {
+	busy := false
+	for _, s := range n.children {
+		if m.recs[s.sessionID].needsAttention() {
+			return "●", helpStyle
+		}
+		if s.status == "busy" {
+			busy = true
+		}
+	}
+	if busy {
+		return "●", busyStyle
+	}
+	return "○", idleStyle
 }
 
 // highlightRow renders a plain (uncolored) row as a full-width black-on-yellow
 // bar, padded to the window width — like tmux's choose-tree selection.
 func (m pickerModel) highlightRow(plain string) string {
-	if pad := m.width - lipgloss.Width(plain); pad > 0 {
+	if pad := m.width - len(rowIndent) - lipgloss.Width(plain); pad > 0 {
 		plain += strings.Repeat(" ", pad)
 	}
 	return selSGR + plain + "\x1b[0m"
