@@ -118,7 +118,7 @@ func reconcileStale(sessions []sessionInfo) {
 	}
 	for id, rec := range listSessionRecs() {
 		if !live[id] {
-			setAttention(rec.Pane, false)
+			setState(rec.Pane, "")
 			removeSessionRec(id)
 		}
 	}

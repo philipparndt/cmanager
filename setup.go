@@ -16,6 +16,13 @@ const (
 	tmuxMarkerEnd   = "# <<< cmanager <<<"
 )
 
+// hookEvents are the Claude Code events we point at `cmanager hook`.
+// UserPromptSubmit/PostToolUse drive the "working" state — they fire as Claude
+// resumes, so a pending ⚠ clears immediately instead of lingering until Stop.
+var hookEvents = []string{
+	"Notification", "UserPromptSubmit", "PostToolUse", "Stop", "SessionStart", "SessionEnd",
+}
+
 // runSetup wires the Claude Code hooks (settings.json) and the tmux keybinding
 // (~/.tmux.conf) to this binary, after showing a preview and asking to apply.
 // Both files are backed up before being written.
@@ -37,7 +44,7 @@ func runSetup() {
 
 	fmt.Printf("cmanager setup will use this binary:\n  %s\n\n", exe)
 	if settingsChanged {
-		fmt.Printf("• %s\n  wire Notification, Stop, SessionStart, SessionEnd → %q\n\n", settingsP, exe+" hook")
+		fmt.Printf("• %s\n  wire %s → %q\n\n", settingsP, strings.Join(hookEvents, ", "), exe+" hook")
 	}
 	if tmuxChanged {
 		fmt.Printf("• %s\n  add this block:\n\n%s\n\n", tmuxP, indentBlock(tmuxBlock(exe)))
@@ -84,7 +91,7 @@ func wireSettings(orig []byte, exe string) (out []byte, changed bool) {
 	cmd := exe + " hook"
 	group := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd}}}
 
-	for _, ev := range []string{"Notification", "Stop", "SessionStart", "SessionEnd"} {
+	for _, ev := range hookEvents {
 		arr, _ := hooks[ev].([]any)
 		var kept []any
 		for _, g := range arr {
@@ -149,14 +156,21 @@ func wireTmux(orig, exe string) (out string, changed bool) {
 	return orig + sep + block + "\n", true
 }
 
+// aiStatusGlyph renders the @ai_status window option (set by `cmanager hook`)
+// as a trailing per-window glyph:  working → …   needs input → ⚠   done → ✓
+// (unset → nothing).
+const aiStatusGlyph = "#{?#{==:#{@ai_status},needs}, ⚠," +
+	"#{?#{==:#{@ai_status},working}, …," +
+	"#{?#{==:#{@ai_status},done}, ✓,}}}"
+
 func tmuxBlock(exe string) string {
 	return tmuxMarkerStart + "\n" +
 		"# Open the cmanager session picker.\n" +
 		fmt.Sprintf("bind a display-popup -E -w 80%% -h 70%% '%s pick'\n", exe) +
-		"# Show a ⚠ on windows whose Claude session needs input (set by the hook).\n" +
+		"# Show each Claude session's state on its window: … working · ⚠ needs you · ✓ done.\n" +
 		"# The current window is bracketed; edit to taste (this block wins, being last).\n" +
-		"set -g window-status-format         '  #I:#W#{?#{==:#{@ai_status},needs}, ⚠,}  '\n" +
-		"set -g window-status-current-format ' [#I:#W#{?#{==:#{@ai_status},needs}, ⚠,}] '\n" +
+		"set -g window-status-format         '  #I:#W" + aiStatusGlyph + "  '\n" +
+		"set -g window-status-current-format ' [#I:#W" + aiStatusGlyph + "] '\n" +
 		tmuxMarkerEnd
 }
 

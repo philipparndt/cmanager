@@ -22,27 +22,33 @@ func tmux(args ...string) (string, error) { return tmuxRunner(args...) }
 // will do something). Outside tmux every helper below is a no-op.
 func inTmux() bool { return os.Getenv("TMUX") != "" }
 
-// displayMessage flashes a transient message on the attached client's status
-// line — the completion "toast".
+// notifyDuration is how long the completion/attention toast stays on the status
+// line, in milliseconds — well past tmux's ~750ms default so it's readable. Use
+// "0" to keep it up until the next key or message.
+const notifyDuration = "4000"
+
+// displayMessage flashes a message on the attached client's status line — the
+// completion "toast" — for notifyDuration.
 func displayMessage(text string) {
 	if !inTmux() {
 		return
 	}
-	_, _ = tmux("display-message", text)
+	_, _ = tmux("display-message", "-d", notifyDuration, text)
 }
 
-// setAttention marks (or clears) the window containing pane as needing
-// attention, via a window-level user option the user's status-line format can
-// render (see README for the .tmux.conf snippet).
-func setAttention(pane string, on bool) {
+// setState reflects a session's state on the window containing pane, via a
+// window-level user option (@ai_status) that the user's status-line format
+// renders as a per-window glyph (see README for the .tmux.conf snippet). state
+// is "working", "needs", or "done"; "" unsets the option (no glyph).
+func setState(pane, state string) {
 	if !inTmux() || pane == "" {
 		return
 	}
-	if on {
-		_, _ = tmux("set-option", "-t", pane, "-w", "@ai_status", "needs")
-	} else {
+	if state == "" {
 		_, _ = tmux("set-option", "-t", pane, "-wu", "@ai_status")
+		return
 	}
+	_, _ = tmux("set-option", "-t", pane, "-w", "@ai_status", state)
 }
 
 // paneIsActive reports whether pane is the one currently in view (its pane and

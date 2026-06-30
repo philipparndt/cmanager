@@ -23,13 +23,19 @@ state they're in.
 - **Pane mapping + notifications** come from a Claude Code hook. `cmanager hook`
   runs on session events; it reads `$TMUX_PANE` from its environment to learn
   which pane the session lives in, records it under
-  `~/.claude/cmanager/sessions/`, and drives tmux:
-  - **Notification** (needs permission / waiting on input) → marks the pane's
-    window (`@ai_status = needs`) and flashes a status-line message — unless that
-    pane is the one you're already looking at.
-  - **Stop** (turn finished) → clears the marker and flashes a "finished"
-    message. Intermediate stops (`stop_hook_active`) are ignored.
-  - **SessionStart / SessionEnd** → record / drop the pane mapping.
+  `~/.claude/cmanager/sessions/`, and drives tmux. Each session's window carries
+  one of three states in the `@ai_status` window option, rendered as a glyph:
+  - **UserPromptSubmit / PostToolUse** (Claude is actively working) →
+    `@ai_status = working` → `…`. These also fire as work resumes right after you
+    answer a prompt, so the ⚠ below clears immediately instead of lingering until
+    the whole turn ends.
+  - **Notification** (needs permission / waiting on input) → `@ai_status = needs`
+    → `⚠`, and flashes a status-line message — unless that pane is the one you're
+    already looking at.
+  - **Stop** (turn finished) → `@ai_status = done` → `✓`, and flashes a
+    "finished" message. Intermediate stops (`stop_hook_active`) stay `working`.
+  - **SessionStart / SessionEnd** → record / drop the pane mapping (SessionEnd
+    also clears the glyph).
 
 Everything degrades gracefully outside tmux (the hook just no-ops the tmux
 calls).
@@ -58,10 +64,12 @@ the `PATH` Claude sees):
 ```json
 {
   "hooks": {
-    "Notification": [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
-    "Stop":         [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
-    "SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
-    "SessionEnd":   [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }]
+    "Notification":     [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "PostToolUse":      [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "Stop":             [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "SessionStart":     [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }],
+    "SessionEnd":       [{ "matcher": "", "hooks": [{ "type": "command", "command": "cmanager hook" }] }]
   }
 }
 ```
@@ -77,9 +85,10 @@ In `~/.tmux.conf`:
 # the tmux server's PATH.
 bind a display-popup -E -w 80% -h 70% '$HOME/.local/bin/cmanager pick'
 
-# show ⚠ on windows whose Claude session needs input (set by `cmanager hook`)
-set -g window-status-format         '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,}'
-set -g window-status-current-format '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,}'
+# show each Claude session's state on its window (set by `cmanager hook`):
+#   … working   ⚠ needs you   ✓ done
+set -g window-status-format         '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,#{?#{==:#{@ai_status},working}, …,#{?#{==:#{@ai_status},done}, ✓,}}}'
+set -g window-status-current-format '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,#{?#{==:#{@ai_status},working}, …,#{?#{==:#{@ai_status},done}, ✓,}}}'
 ```
 
 Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
@@ -92,7 +101,8 @@ Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
 
 - Run Claude normally inside tmux panes — no wrapper needed.
 - When a session in another pane needs you or finishes, you'll see it in the
-  status line (and the window gets a ⚠ until you answer).
+  status line, and its window shows its state: `…` working · `⚠` needs you · `✓`
+  done. The `⚠` clears as soon as Claude resumes work, not just when it finishes.
 - Hit `prefix + a` to open the picker. Keys: `↑/↓` move · `enter` jump to the
   pane · `space`/`←`/`→` collapse/expand a session's subagents · `/` filter ·
   `r` refresh · `q`/`esc` dismiss.

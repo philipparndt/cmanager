@@ -55,9 +55,9 @@ func TestHookNotificationThenStop(t *testing.T) {
 		t.Fatalf("after Notification: %+v ok=%v", rec, ok)
 	}
 	if !calledWith(*calls, "set-option -t %4 -w @ai_status needs") {
-		t.Errorf("expected attention set, calls=%v", *calls)
+		t.Errorf("expected needs state set, calls=%v", *calls)
 	}
-	if !calledWith(*calls, "display-message ⚠") {
+	if !calledWith(*calls, "display-message -d "+notifyDuration+" ⚠") {
 		t.Errorf("expected needs toast, calls=%v", *calls)
 	}
 
@@ -66,11 +66,36 @@ func TestHookNotificationThenStop(t *testing.T) {
 	if rec.Needs {
 		t.Errorf("Stop should clear Needs: %+v", rec)
 	}
-	if !calledWith(*calls, "set-option -t %4 -wu @ai_status") {
-		t.Errorf("expected attention cleared, calls=%v", *calls)
+	if !calledWith(*calls, "set-option -t %4 -w @ai_status done") {
+		t.Errorf("expected done state, calls=%v", *calls)
 	}
-	if !calledWith(*calls, "display-message ✓") {
+	if !calledWith(*calls, "display-message -d "+notifyDuration+" ✓") {
 		t.Errorf("expected finished toast, calls=%v", *calls)
+	}
+}
+
+// A pending ⚠ must clear the moment work resumes (PostToolUse), not linger until
+// the turn ends — the bug that left a stale triangle up for minutes.
+func TestHookWorkingClearsNeeds(t *testing.T) {
+	calls := withFakeTmux(t)
+
+	handleHook(hookEvent{HookEventName: "Notification", SessionID: "s5", Cwd: "/p", Message: "Approve edit?"}, "%7", 1000)
+	if rec, _ := loadSessionRec("s5"); !rec.Needs {
+		t.Fatalf("Notification should mark needs: %+v", rec)
+	}
+
+	before := len(*calls)
+	handleHook(hookEvent{HookEventName: "PostToolUse", SessionID: "s5", Cwd: "/p"}, "%7", 2000)
+	rec, _ := loadSessionRec("s5")
+	if rec.Needs {
+		t.Errorf("PostToolUse should clear Needs: %+v", rec)
+	}
+	resume := (*calls)[before:]
+	if !calledWith(resume, "set-option -t %7 -w @ai_status working") {
+		t.Errorf("expected working state, calls=%v", resume)
+	}
+	if calledWith(resume, "display-message") {
+		t.Errorf("working transition must not toast, calls=%v", resume)
 	}
 }
 

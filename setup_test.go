@@ -31,7 +31,7 @@ func TestWireSettingsAddsAndIsIdempotent(t *testing.T) {
 		t.Errorf("unrelated keys must be preserved, got model=%v", root["model"])
 	}
 	hooks := root["hooks"].(map[string]any)
-	for _, ev := range []string{"Notification", "Stop", "SessionStart", "SessionEnd"} {
+	for _, ev := range hookEvents {
 		groups, _ := hooks[ev].([]any)
 		if len(groups) == 0 {
 			t.Fatalf("%s not wired", ev)

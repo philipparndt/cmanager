@@ -34,13 +34,13 @@ func runHook() {
 // Split out from runHook (with pane/now injected) so it is unit-testable.
 func handleHook(e hookEvent, pane string, nowMs int64) {
 	if e.HookEventName == "SessionEnd" {
-		// Clear the window badge — exiting Claude with a prompt pending fires
-		// SessionEnd but no Stop, so the ⚠ would otherwise stick.
+		// Clear the window glyph — exiting Claude with a prompt pending fires
+		// SessionEnd but no Stop, so the badge would otherwise stick.
 		p := pane
 		if p == "" {
 			p = mustPane(e.SessionID)
 		}
-		setAttention(p, false)
+		setState(p, "")
 		removeSessionRec(e.SessionID)
 		return
 	}
@@ -61,31 +61,42 @@ func handleHook(e hookEvent, pane string, nowMs int64) {
 	case "Notification":
 		// Claude fires Notification both for blocking permission prompts and for
 		// the idle "waiting for your input" nudge (~60s after a turn ends). Only
-		// the former actually needs the user; the idle nudge should read as idle.
+		// the former actually needs the user; the idle nudge reads as finished.
 		if isIdleNudge(e.Message) {
 			rec.Needs = false
 			rec.Message = ""
 			_ = saveSessionRec(rec)
-			setAttention(rec.Pane, false)
+			setState(rec.Pane, "done")
 			return
 		}
 		rec.Needs = true
 		rec.Message = e.Message
 		_ = saveSessionRec(rec)
+		setState(rec.Pane, "needs") // ⚠ — cleared the moment work resumes (below)
 		if !paneIsActive(rec.Pane) {
-			setAttention(rec.Pane, true)
 			displayMessage(notifyText("⚠", rec.Cwd, "needs your input"))
 		}
 
+	case "UserPromptSubmit", "PostToolUse":
+		// Claude is actively working — a new turn started, or a tool just ran
+		// (e.g. right after you answered a permission prompt). This is what
+		// clears a lingering ⚠ promptly, instead of waiting for the turn to end.
+		rec.Needs = false
+		rec.Message = ""
+		_ = saveSessionRec(rec)
+		setState(rec.Pane, "working")
+
 	case "Stop":
 		if e.StopHookActive {
-			_ = saveSessionRec(rec) // intermediate block-cap retry, not a finished turn
+			// Intermediate block-cap retry, not a finished turn — still working.
+			_ = saveSessionRec(rec)
+			setState(rec.Pane, "working")
 			return
 		}
 		rec.Needs = false
 		rec.Message = ""
 		_ = saveSessionRec(rec)
-		setAttention(rec.Pane, false)
+		setState(rec.Pane, "done")
 		if !paneIsActive(rec.Pane) {
 			displayMessage(notifyText("✓", rec.Cwd, "finished"))
 		}
