@@ -1,0 +1,30 @@
+name: Go
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+        id: go
+
+      - name: Build
+        run: go build -v -ldflags "-s -w -X main.version=$GITHUB_REF -X main.commit=${GITHUB_SHA::8}" .
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...

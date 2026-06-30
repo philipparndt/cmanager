@@ -40,3 +40,6 @@ go.work.sum
 # env file
 .env
 bin
+
+# goreleaser output
+dist/

@@ -16,6 +16,13 @@ import (
 	"time"
 )
 
+// Build metadata, injected via -ldflags at release time (see .goreleaser.yaml).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -27,6 +34,9 @@ func main() {
 			return
 		case "pick":
 			// fall through to the picker
+		case "version", "-v", "--version":
+			fmt.Printf("cmanager %s (%s) built %s\n", version, commit, date)
+			return
 		case "-h", "--help", "help":
 			usage()
 			return
@@ -46,6 +56,7 @@ usage:
   cmanager pick       same as above
   cmanager setup      wire the Claude hooks + tmux keybinding (with backups)
   cmanager hook       Claude Code hook target; reads the event JSON on stdin
+  cmanager version    print version information
 `)
 }
 
