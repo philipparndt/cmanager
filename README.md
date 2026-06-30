@@ -1,7 +1,34 @@
 # cmanager
 
-A tmux-native helper for working with many Claude Code sessions at once. It does
-two things and lets tmux do everything else:
+A tmux-native helper for working with many Claude Code sessions at once: get
+notified in tmux when a session needs you or finishes a turn, and pop open a
+picker to jump straight to any session's pane.
+
+![cmanager — jump to any Claude session in tmux](docs/cmanager.gif)
+
+## Install
+
+**Homebrew**
+
+```sh
+brew install philipparndt/cmanager/cmanager
+cmanager setup     # wire the Claude hooks + tmux keybinding (shows a preview, asks first)
+```
+
+**From source** (requires Go)
+
+```sh
+git clone https://github.com/philipparndt/cmanager.git
+cd cmanager
+make install       # builds + installs bin/cmanager to ~/.local/bin
+cmanager setup
+```
+
+Then reload tmux (`tmux source-file ~/.tmux.conf`) and restart your Claude
+sessions so the hooks attach. See [Setup](#install-details) below for what
+`cmanager setup` changes and how to wire it by hand.
+
+## What it does
 
 1. **Notifies you in tmux** when a Claude session in another pane needs your
    input or finishes a turn.
@@ -40,12 +67,9 @@ state they're in.
 Everything degrades gracefully outside tmux (the hook just no-ops the tmux
 calls).
 
-## Install
+<a name="install-details"></a>
 
-```sh
-make install          # builds and installs bin/cmanager to ~/.local/bin
-cmanager setup        # wires the hooks + tmux keybinding (shows a preview, asks first)
-```
+## Setup
 
 `cmanager setup` edits `~/.claude/settings.json` and `~/.tmux.conf` for you — it
 backs each up first (`.bak-<timestamp>`), shows exactly what it will add, and
