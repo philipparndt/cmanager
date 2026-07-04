@@ -22,6 +22,7 @@ type cachedNode struct {
 	Status    string       `json:"st,omitempty"`
 	Task      string       `json:"tk,omitempty"`
 	StartedAt int64        `json:"t,omitempty"`
+	LimitAt   int64        `json:"lr,omitempty"`  // usage-limit reset, epoch ms; 0 = not limited
 	Running   bool         `json:"r,omitempty"`   // agent running snapshot
 	Pid       int          `json:"pid,omitempty"` // session pid, for the pid→pane fallback
 	Cwd       string       `json:"cwd,omitempty"` // session cwd, for the Ghostty cwd match
@@ -41,6 +42,9 @@ func toCached(n *treeNode) cachedNode {
 		Status: n.status, Task: n.task, StartedAt: n.startedAt, Running: n.agentRunning(),
 		Pid: n.pid, Cwd: n.cwd, Pane: n.pane, WinKey: n.winKey, WinLabel: n.winLabel, Ghostty: n.ghosttyID, Owner: n.owner,
 	}
+	if !n.limitReset.IsZero() {
+		cn.LimitAt = n.limitReset.UnixMilli()
+	}
 	for _, c := range n.children {
 		cn.Children = append(cn.Children, toCached(c))
 	}
@@ -55,6 +59,9 @@ func fromCached(cn cachedNode) *treeNode {
 	}
 	if cn.Running { // make agentRunning() report true again
 		n.lastMod = time.Now()
+	}
+	if cn.LimitAt != 0 {
+		n.limitReset = time.UnixMilli(cn.LimitAt)
 	}
 	for _, c := range cn.Children {
 		n.children = append(n.children, fromCached(c))

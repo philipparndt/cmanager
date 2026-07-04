@@ -41,10 +41,11 @@ var (
 	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
-	busyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("220")) // amber
-	idleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	doneStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))             // green
-	helpStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")) // red
+	busyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("220")) // amber
+	idleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	limitStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))            // orange — blocked on usage limit
+	doneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))             // green
+	helpStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")) // red
 
 	agentLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	winStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
@@ -147,7 +148,7 @@ func (m pickerModel) nodeComplete(n *treeNode) bool {
 	case kindWindow, kindApp:
 		return true // a container; childrenComplete drives whether it collapses
 	}
-	if n.status == "busy" || m.recs[n.sessionID].needsAttention() {
+	if n.status == "busy" || n.limited() || m.recs[n.sessionID].needsAttention() {
 		return false
 	}
 	return true
@@ -685,7 +686,10 @@ func (m pickerModel) detailPanel(n *treeNode) string {
 		return sep + state + dimStyle.Render(" · subagent · ") + agentLabelStyle.Render(truncate(n.label, w-16)) + "\n"
 	}
 	out := sep + titleStyle.Render(truncate(n.cwd, w))
-	if rec := m.recs[n.sessionID]; rec.needsAttention() && rec.Message != "" {
+	if n.limited() {
+		reset := n.limitReset.In(time.Local).Format("3:04pm")
+		out += "\n" + limitStyle.Render("⏳ usage limit — resets in "+countdown(n.limitReset)+" ("+reset+")")
+	} else if rec := m.recs[n.sessionID]; rec.needsAttention() && rec.Message != "" {
 		out += "\n" + helpStyle.Render("● "+truncate(oneLine(rec.Message), w-2))
 	} else if n.task != "" {
 		out += "\n" + dimStyle.Render("→ "+truncate(oneLine(n.task), w-2))
@@ -745,6 +749,10 @@ func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
 	} else {
 		rec := m.recs[n.sessionID]
 		switch {
+		case n.limited():
+			// Blocked on a usage limit — countdown to the reset. Checked before
+			// "busy" because a session auto-retrying at reset still reports busy.
+			dotCh, statusTxt, st = "●", "⏳ "+countdown(n.limitReset), limitStyle
 		case n.status == "busy":
 			dotCh, statusTxt, st = "●", "working", busyStyle
 		case rec.needsAttention():
@@ -771,7 +779,8 @@ func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
 		marker = "⊘ "
 		label = fit(n.label, lw-markerW)
 	}
-	status := fit(statusTxt, statusW)
+	// Pad the status by display width, not rune count — ⏳ is two cells wide.
+	status := statusTxt + strings.Repeat(" ", max(0, statusW-lipgloss.Width(statusTxt)))
 	timeStr := uptime(n.startedAt)
 
 	// Selected: a full-width black-on-yellow bar with plain (uncolored) text.
@@ -806,21 +815,42 @@ func (m pickerModel) renderGroupRow(n *treeNode, prefix, caret string, selected 
 }
 
 // groupDot aggregates the state of a group's sessions into one status dot: red
-// if any session is waiting on the user, amber if any is working, else idle.
+// if any session is waiting on the user, amber if any is working, orange if any
+// is blocked on a usage limit, else idle.
 func (m pickerModel) groupDot(n *treeNode) (string, lipgloss.Style) {
-	busy := false
+	busy, limited := false, false
 	for _, s := range n.children {
 		if m.recs[s.sessionID].needsAttention() {
 			return "●", helpStyle
 		}
-		if s.status == "busy" {
+		if s.limited() {
+			limited = true
+		} else if s.status == "busy" {
 			busy = true
 		}
 	}
 	if busy {
 		return "●", busyStyle
 	}
+	if limited {
+		return "●", limitStyle
+	}
 	return "○", idleStyle
+}
+
+// countdown renders the time remaining until t as a compact duration like
+// "35m" or "1h05m", for the usage-limit reset countdown.
+func countdown(t time.Time) string {
+	d := time.Until(t).Round(time.Minute)
+	if d < time.Minute {
+		return "<1m"
+	}
+	h := d / time.Hour
+	m := (d % time.Hour) / time.Minute
+	if h > 0 {
+		return fmt.Sprintf("%dh%02dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
 // highlightRow renders a plain (uncolored) row as a full-width black-on-yellow

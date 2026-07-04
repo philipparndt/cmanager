@@ -36,7 +36,8 @@ sessions so the hooks attach. See [Setup](#install-details) below for what
    one and it jumps to that session. Sessions are grouped by how they're reached:
    **tmux** panes first, then a **ghostty** section (macOS surfaces, for sessions
    run outside tmux), then a dimmed **can't jump** section for sessions reachable
-   by neither.
+   by neither. A session blocked on a usage limit shows a countdown to the reset
+   (e.g. `⏳ 35m`) instead of its status.
 
 It is *not* a terminal multiplexer: there is no screen mirroring, no PTY
 wrapping, no pane resizing. tmux already does all of that. cmanager only adds the

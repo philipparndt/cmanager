@@ -21,20 +21,21 @@ const (
 // treeNode is one row in the picker: an interactive session or a (possibly
 // nested) subagent spawned by one.
 type treeNode struct {
-	kind      nodeKind
-	label     string
-	sessionID string // owning session id (set on sessions and their agents)
-	agentID   string // agent id (agents only)
-	agentType string
-	cwd       string
-	status    string // sessions: "busy" | "idle"
-	task      string // sessions: latest user prompt (what it's working on)
-	startedAt int64  // epoch ms
-	lastMod   time.Time
-	logPath   string // agent log (agents only), for the running heuristic
-	depth     int
-	prefix    string // tree connector prefix, set by flattenTree
-	children  []*treeNode
+	kind       nodeKind
+	label      string
+	sessionID  string // owning session id (set on sessions and their agents)
+	agentID    string // agent id (agents only)
+	agentType  string
+	cwd        string
+	status     string    // sessions: "busy" | "idle"
+	task       string    // sessions: latest user prompt (what it's working on)
+	limitReset time.Time // sessions: usage-limit reset time, zero when not limited
+	startedAt  int64     // epoch ms
+	lastMod    time.Time
+	logPath    string // agent log (agents only), for the running heuristic
+	depth      int
+	prefix     string // tree connector prefix, set by flattenTree
+	children   []*treeNode
 
 	pid       int    // claude process id (sessions only), for pid→pane fallback
 	pane      string // resolved tmux pane (sessions only); "" means not in tmux
@@ -70,7 +71,7 @@ func buildTree(sessions []sessionInfo, includeAgents bool) []*treeNode {
 			pid:       s.PID,
 		}
 		if includeAgents {
-			n.task = latestPrompt(s.SessionID)
+			n.task, n.limitReset = scanTranscript(s.SessionID)
 			n.children = findSubagents(s.SessionID, 1)
 			stampSession(n.children, s.SessionID)
 		}
@@ -164,4 +165,10 @@ func (n *treeNode) group() sessionGroup {
 
 func (n *treeNode) agentRunning() bool {
 	return !n.lastMod.IsZero() && time.Since(n.lastMod) < agentActiveWindow
+}
+
+// limited reports whether a session is currently blocked on a usage limit
+// (its transcript ends in a limit error whose reset time hasn't passed).
+func (n *treeNode) limited() bool {
+	return !n.limitReset.IsZero() && n.limitReset.After(time.Now())
 }
