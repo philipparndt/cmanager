@@ -64,6 +64,11 @@ state they're in.
     "finished" message. Intermediate stops (`stop_hook_active`) stay `working`.
   - **SessionStart / SessionEnd** → record / drop the pane mapping (SessionEnd
     also clears the glyph).
+- **The usage-limit countdown** (`⏳ 35m` on the window) comes from tmux itself:
+  the window-status format includes `#(cmanager limit #{window_id})`, which tmux
+  re-runs every `status-interval` (15s by default). It scans the window's session
+  transcripts for a usage-limit error and prints the time until the limit resets,
+  ticking down in the tab with no resident process.
 
 Everything degrades gracefully outside tmux (the hook just no-ops the tmux
 calls).
@@ -110,10 +115,11 @@ In `~/.tmux.conf`:
 # the tmux server's PATH.
 bind a display-popup -E -w 80% -h 70% '$HOME/.local/bin/cmanager pick'
 
-# show each Claude session's state on its window (set by `cmanager hook`):
-#   … working   ⚠ needs you   ✓ done
-set -g window-status-format         '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,#{?#{==:#{@ai_status},working}, …,#{?#{==:#{@ai_status},done}, ✓,}}}'
-set -g window-status-current-format '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,#{?#{==:#{@ai_status},working}, …,#{?#{==:#{@ai_status},done}, ✓,}}}'
+# show each Claude session's state on its window (set by `cmanager hook`),
+# plus a usage-limit countdown (⏳ 35m) that tmux refreshes every status-interval:
+#   … working   ⚠ needs you   ✓ done   ⏳ 35m usage limit
+set -g window-status-format         '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,#{?#{==:#{@ai_status},working}, …,#{?#{==:#{@ai_status},done}, ✓,}}}#($HOME/.local/bin/cmanager limit #{window_id})'
+set -g window-status-current-format '#I:#W#{?#{==:#{@ai_status},needs}, ⚠,#{?#{==:#{@ai_status},working}, …,#{?#{==:#{@ai_status},done}, ✓,}}}#($HOME/.local/bin/cmanager limit #{window_id})'
 ```
 
 Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
@@ -127,7 +133,8 @@ Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
 - Run Claude normally inside tmux panes — no wrapper needed.
 - When a session in another pane needs you or finishes, you'll see it in the
   status line, and its window shows its state: `…` working · `⚠` needs you · `✓`
-  done. The `⚠` clears as soon as Claude resumes work, not just when it finishes.
+  done · `⏳ 35m` blocked on a usage limit (counts down to the reset). The `⚠`
+  clears as soon as Claude resumes work, not just when it finishes.
 - Hit `prefix + a` to open the picker. Keys: `↑/↓` move · `enter` jump to the
   pane · `space`/`←`/`→` collapse/expand a session's subagents · `/` filter ·
   `r` refresh · `q`/`esc` dismiss.

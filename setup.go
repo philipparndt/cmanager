@@ -164,13 +164,17 @@ const aiStatusGlyph = "#{?#{==:#{@ai_status},needs}, ⚠," +
 	"#{?#{==:#{@ai_status},done}, ✓,}}}"
 
 func tmuxBlock(exe string) string {
+	// tmux re-runs the #() command every status-interval, which is what keeps
+	// the usage-limit countdown ticking without any resident process.
+	limitBadge := fmt.Sprintf("#(%s limit #{window_id})", exe)
 	return tmuxMarkerStart + "\n" +
 		"# Open the cmanager session picker.\n" +
 		fmt.Sprintf("bind a display-popup -E -w 80%% -h 70%% '%s pick'\n", exe) +
-		"# Show each Claude session's state on its window: … working · ⚠ needs you · ✓ done.\n" +
+		"# Show each Claude session's state on its window: … working · ⚠ needs you · ✓ done,\n" +
+		"# plus a usage-limit countdown (⏳ 35m), refreshed every status-interval.\n" +
 		"# The current window is bracketed; edit to taste (this block wins, being last).\n" +
-		"set -g window-status-format         '  #I:#W" + aiStatusGlyph + "  '\n" +
-		"set -g window-status-current-format ' [#I:#W" + aiStatusGlyph + "] '\n" +
+		"set -g window-status-format         '  #I:#W" + aiStatusGlyph + limitBadge + "  '\n" +
+		"set -g window-status-current-format ' [#I:#W" + aiStatusGlyph + limitBadge + "] '\n" +
 		tmuxMarkerEnd
 }
 
@@ -183,7 +187,10 @@ func resolveExe() string {
 	if err != nil {
 		return "cmanager"
 	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+	// Keep a Homebrew-style stable symlink (/opt/homebrew/bin/cmanager) rather
+	// than its versioned Cellar target, which breaks on every brew upgrade.
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil &&
+		!strings.Contains(resolved, string(filepath.Separator)+"Cellar"+string(filepath.Separator)) {
 		return resolved
 	}
 	return exe

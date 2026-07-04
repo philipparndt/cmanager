@@ -32,6 +32,11 @@ func main() {
 		case "setup":
 			runSetup()
 			return
+		case "limit":
+			if len(os.Args) > 2 {
+				runLimitBadge(os.Args[2])
+			}
+			return
 		case "pick":
 			// fall through to the picker
 		case "version", "-v", "--version":
@@ -56,6 +61,7 @@ usage:
   cmanager pick       same as above
   cmanager setup      wire the Claude hooks + tmux keybinding (with backups)
   cmanager hook       Claude Code hook target; reads the event JSON on stdin
+  cmanager limit <id> print a window's usage-limit countdown (run by tmux #())
   cmanager version    print version information
 `)
 }

@@ -39,7 +39,8 @@ func displayMessage(text string) {
 // setState reflects a session's state on the window containing pane, via a
 // window-level user option (@ai_status) that the user's status-line format
 // renders as a per-window glyph (see README for the .tmux.conf snippet). state
-// is "working", "needs", or "done"; "" unsets the option (no glyph).
+// is "working", "needs", or "done"; "" unsets the option (no glyph). A fourth
+// value, "limited", is written by `cmanager limit` while its countdown shows.
 func setState(pane, state string) {
 	if !inTmux() || pane == "" {
 		return
