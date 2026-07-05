@@ -25,11 +25,29 @@ func TestLimitBadgeActive(t *testing.T) {
 	}
 }
 
-func TestLimitBadgeOver(t *testing.T) {
+func TestLimitBadgeReadyToContinue(t *testing.T) {
 	now := time.Now()
 
-	// Limit passed while we were showing the countdown: hand back to "done".
-	text, newStatus := limitBadge(now.Add(-time.Minute), "limited", now)
+	// Reset passed but the session is still paused (non-zero reset): show the
+	// continue marker and keep the glyph parked on "limited".
+	text, newStatus := limitBadge(now.Add(-time.Minute), "done", now)
+	if text != " ▶" || newStatus != "limited" {
+		t.Errorf("got (%q, %q), want (\" ▶\", \"limited\")", text, newStatus)
+	}
+
+	// Already parked: no redundant write.
+	_, newStatus = limitBadge(now.Add(-time.Minute), "limited", now)
+	if newStatus != "" {
+		t.Errorf("newStatus: got %q, want no change", newStatus)
+	}
+}
+
+func TestLimitBadgeResumed(t *testing.T) {
+	now := time.Now()
+
+	// Zero reset = session resumed (a newer message landed): hand the glyph
+	// back to the hook states.
+	text, newStatus := limitBadge(time.Time{}, "limited", now)
 	if text != "" || newStatus != "done" {
 		t.Errorf("got (%q, %q), want (\"\", \"done\")", text, newStatus)
 	}

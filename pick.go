@@ -41,11 +41,12 @@ var (
 	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	helpBarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
-	busyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("220")) // amber
-	idleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	limitStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))            // orange — blocked on usage limit
-	doneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))             // green
-	helpStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")) // red
+	busyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("220")) // amber
+	idleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	limitStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))            // orange — blocked on usage limit
+	continueStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("48"))  // green — limit reset, ready to continue
+	doneStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))             // green
+	helpStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")) // red
 
 	agentLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	winStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
@@ -148,7 +149,7 @@ func (m pickerModel) nodeComplete(n *treeNode) bool {
 	case kindWindow, kindApp:
 		return true // a container; childrenComplete drives whether it collapses
 	}
-	if n.status == "busy" || n.limited() || m.recs[n.sessionID].needsAttention() {
+	if n.status == "busy" || n.limitPaused() || m.recs[n.sessionID].needsAttention() {
 		return false
 	}
 	return true
@@ -686,7 +687,10 @@ func (m pickerModel) detailPanel(n *treeNode) string {
 		return sep + state + dimStyle.Render(" · subagent · ") + agentLabelStyle.Render(truncate(n.label, w-16)) + "\n"
 	}
 	out := sep + titleStyle.Render(truncate(n.cwd, w))
-	if n.limited() {
+	if n.canContinue() {
+		reset := n.limitReset.In(time.Local).Format("3:04pm")
+		out += "\n" + continueStyle.Render("▶ usage limit reset at "+reset+" — enter to continue")
+	} else if n.limited() {
 		reset := n.limitReset.In(time.Local).Format("3:04pm")
 		out += "\n" + limitStyle.Render("⏳ usage limit — resets in "+countdown(n.limitReset)+" ("+reset+")")
 	} else if rec := m.recs[n.sessionID]; rec.needsAttention() && rec.Message != "" {
@@ -749,6 +753,9 @@ func (m pickerModel) renderRow(n *treeNode, selected, unjumpable bool) string {
 	} else {
 		rec := m.recs[n.sessionID]
 		switch {
+		case n.canContinue():
+			// Was cut off by a usage limit that has since reset — ready to resume.
+			dotCh, statusTxt, st = "▶", "continue", continueStyle
 		case n.limited():
 			// Blocked on a usage limit — countdown to the reset. Checked before
 			// "busy" because a session auto-retrying at reset still reports busy.
@@ -818,16 +825,24 @@ func (m pickerModel) renderGroupRow(n *treeNode, prefix, caret string, selected 
 // if any session is waiting on the user, amber if any is working, orange if any
 // is blocked on a usage limit, else idle.
 func (m pickerModel) groupDot(n *treeNode) (string, lipgloss.Style) {
-	busy, limited := false, false
+	busy, limited, cont := false, false, false
 	for _, s := range n.children {
 		if m.recs[s.sessionID].needsAttention() {
 			return "●", helpStyle
 		}
-		if s.limited() {
+		switch {
+		case s.canContinue():
+			cont = true
+		case s.limited():
 			limited = true
-		} else if s.status == "busy" {
+		case s.status == "busy":
 			busy = true
 		}
+	}
+	// A session ready to continue is actionable now — surface it above a passive
+	// countdown or a still-working sibling.
+	if cont {
+		return "▶", continueStyle
 	}
 	if busy {
 		return "●", busyStyle

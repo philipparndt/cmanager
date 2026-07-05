@@ -24,20 +24,25 @@ func runLimitBadge(win string) {
 }
 
 // limitBadge decides the badge text and the @ai_status transition ("" = leave
-// as is). While the countdown shows, @ai_status is parked on "limited" — a
-// state the glyph conditional renders as nothing — so a stale ✓/… doesn't sit
-// next to it; any hook event (work resuming) simply overwrites it.
+// as is). While a limit countdown or a ready-to-continue marker shows,
+// @ai_status is parked on "limited" — a state the glyph conditional renders as
+// nothing — so a stale ✓/… doesn't sit next to it; any hook event (work
+// resuming) simply overwrites it. reset is the session's usage-limit reset time,
+// or zero when no session in the window is paused on a limit.
 func limitBadge(reset time.Time, cur string, now time.Time) (text, newStatus string) {
-	if !reset.After(now) {
+	if reset.IsZero() {
 		if cur == "limited" {
-			return "", "done" // limit over — hand the glyph back to the hook states
+			return "", "done" // resumed — hand the glyph back to the hook states
 		}
 		return "", ""
 	}
 	if cur != "limited" {
 		newStatus = "limited"
 	}
-	return " ⏳ " + countdown(reset), newStatus
+	if reset.After(now) {
+		return " ⏳ " + countdown(reset), newStatus // still counting down
+	}
+	return " ▶", newStatus // limit reset — ready to continue
 }
 
 // windowLimitReset returns the furthest usage-limit reset among the sessions

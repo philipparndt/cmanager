@@ -68,7 +68,9 @@ state they're in.
   the window-status format includes `#(cmanager limit #{window_id})`, which tmux
   re-runs every `status-interval` (15s by default). It scans the window's session
   transcripts for a usage-limit error and prints the time until the limit resets,
-  ticking down in the tab with no resident process.
+  ticking down in the tab with no resident process. Once the reset passes but the
+  session is still paused on the limit (it doesn't resume on its own), the badge
+  switches to `▶` — that session is ready for you to jump back and continue it.
 
 Everything degrades gracefully outside tmux (the hook just no-ops the tmux
 calls).
@@ -133,8 +135,9 @@ Reload with `tmux source-file ~/.tmux.conf`. Requires tmux ≥ 3.2 for
 - Run Claude normally inside tmux panes — no wrapper needed.
 - When a session in another pane needs you or finishes, you'll see it in the
   status line, and its window shows its state: `…` working · `⚠` needs you · `✓`
-  done · `⏳ 35m` blocked on a usage limit (counts down to the reset). The `⚠`
-  clears as soon as Claude resumes work, not just when it finishes.
+  done · `⏳ 35m` blocked on a usage limit (counts down to the reset) · `▶` the
+  limit reset and the session is ready to continue. The `⚠` clears as soon as
+  Claude resumes work, not just when it finishes.
 - Hit `prefix + a` to open the picker. Keys: `↑/↓` move · `enter` jump to the
   pane · `space`/`←`/`→` collapse/expand a session's subagents · `/` filter ·
   `r` refresh · `q`/`esc` dismiss.

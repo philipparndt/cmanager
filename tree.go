@@ -167,8 +167,20 @@ func (n *treeNode) agentRunning() bool {
 	return !n.lastMod.IsZero() && time.Since(n.lastMod) < agentActiveWindow
 }
 
-// limited reports whether a session is currently blocked on a usage limit
-// (its transcript ends in a limit error whose reset time hasn't passed).
+// limitPaused reports whether a session was cut off by a usage limit and hasn't
+// resumed — its transcript still ends in the limit error. It stays true after
+// the reset passes (the session doesn't continue on its own); it clears only
+// when a newer message appears (the session resumed).
+func (n *treeNode) limitPaused() bool { return !n.limitReset.IsZero() }
+
+// limited reports a session paused on a usage limit whose reset is still in the
+// future — i.e. it's counting down and can't continue yet.
 func (n *treeNode) limited() bool {
-	return !n.limitReset.IsZero() && n.limitReset.After(time.Now())
+	return n.limitPaused() && n.limitReset.After(time.Now())
+}
+
+// canContinue reports a session paused on a usage limit whose reset has passed —
+// the limit is over, so you can jump back and continue it.
+func (n *treeNode) canContinue() bool {
+	return n.limitPaused() && !n.limitReset.After(time.Now())
 }
